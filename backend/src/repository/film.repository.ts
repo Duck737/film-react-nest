@@ -1,26 +1,42 @@
-import { BadRequestException, Inject, Injectable } from '@nestjs/common';
-import { FilmEntity, FilmRepository } from './film.repository.interface';
-import { Connection, Model } from 'mongoose';
-import { FilmSchema } from './film.schema';
+import { BadRequestException, Injectable } from '@nestjs/common';
+import { FilmRepository } from './film.repository.interface';
 import { FilmDto, FilmScheduleDto } from 'src/films/dto/films.dto';
 import { OrderTicketDto } from 'src/order/dto/order.dto';
+import { InjectRepository } from '@nestjs/typeorm';
+import { Film } from './entities/film.entity';
+import { DataSource, Repository } from 'typeorm';
+import { Schedule } from './entities/schedule.entity';
 
-@Injectable()
-export class MongoFilmRepository implements FilmRepository {
-  private readonly filmModel: Model<FilmEntity>;
-
-  constructor(@Inject('MONGO_CONNECTION') connection: Connection) {
-    this.filmModel = connection.model<FilmEntity>('Film', FilmSchema);
+const splitTextList = (value: string): string[] => {
+  if (!value) {
+    return [];
   }
 
+  return value.split(',').filter(Boolean);
+};
+
+const joinTextList = (items: string[]): string => items.join(',');
+
+@Injectable()
+export class TypeOrmFilmRepository implements FilmRepository {
+  constructor(
+    @InjectRepository(Film)
+    private readonly filmRepository: Repository<Film>,
+
+    @InjectRepository(Schedule)
+    private readonly scheduleRepository: Repository<Schedule>,
+
+    private readonly dataSource: DataSource,
+  ) {}
+
   async findAll(): Promise<FilmDto[]> {
-    const films = await this.filmModel.find().lean();
+    const films = await this.filmRepository.find();
 
     return films.map((film) => ({
       id: film.id,
       rating: film.rating,
       director: film.director,
-      tags: film.tags,
+      tags: splitTextList(film.tags),
       image: film.image,
       cover: film.cover,
       title: film.title,
@@ -30,38 +46,66 @@ export class MongoFilmRepository implements FilmRepository {
   }
 
   async findScheduleByFilmId(id: string): Promise<FilmScheduleDto[]> {
-    const film = await this.filmModel.findOne({ id }).lean();
+    const schedules = await this.scheduleRepository.find({
+      where: { filmId: id },
+      order: {
+        daytime: 'ASC',
+        hall: 'ASC',
+        id: 'ASC',
+      },
+    });
 
-    return film?.schedule ?? [];
+    return schedules.map((schedule) => ({
+      id: schedule.id,
+      daytime: schedule.daytime,
+      hall: schedule.hall,
+      rows: schedule.rows,
+      seats: schedule.seats,
+      price: schedule.price,
+      taken: splitTextList(schedule.taken),
+    }));
   }
 
   async takeTickets(tickets: OrderTicketDto[]): Promise<OrderTicketDto[]> {
-    for (const ticket of tickets) {
-      const place = `${ticket.row}:${ticket.seat}`;
+    return this.dataSource.transaction(async (manager) => {
+      const requestedPlaces = new Set<string>();
 
-      const film = await this.filmModel.findOne({
-        id: ticket.film,
-        'schedule.id': ticket.session,
-      });
+      for (const ticket of tickets) {
+        const place = `${ticket.row}:${ticket.seat}`;
+        const requestKey = `${ticket.film}:${ticket.session}:${place}`;
 
-      if (!film) {
-        throw new BadRequestException('Film or session not found');
+        if (requestedPlaces.has(requestKey)) {
+          throw new BadRequestException('Seat is already taken');
+        }
+
+        requestedPlaces.add(requestKey);
+
+        const schedule = await manager.findOne(Schedule, {
+          where: {
+            id: ticket.session,
+            filmId: ticket.film,
+          },
+          lock: {
+            mode: 'pessimistic_write',
+          },
+        });
+
+        if (!schedule) {
+          throw new BadRequestException('Film or session not found');
+        }
+
+        const taken = splitTextList(schedule.taken);
+
+        if (taken.includes(place)) {
+          throw new BadRequestException('Seat is already taken');
+        }
+
+        schedule.taken = joinTextList([...taken, place]);
+
+        await manager.save(Schedule, schedule);
       }
 
-      const session = film.schedule.find((item) => item.id === ticket.session);
-
-      if (!session) {
-        throw new BadRequestException('Session not found');
-      }
-
-      if (session.taken.includes(place)) {
-        throw new BadRequestException('Seat is already taken');
-      }
-
-      session.taken.push(place);
-      await film.save();
-    }
-
-    return tickets;
+      return tickets;
+    });
   }
 }
