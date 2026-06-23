@@ -10,7 +10,7 @@ import { TypeOrmFilmRepository } from './film.repository';
     TypeOrmModule.forRootAsync({
       inject: [ConfigService],
       useFactory: (configService: ConfigService) => ({
-        type: 'postgres',
+        type: configService.getOrThrow<string>('DATABASE_DRIVER') as 'postgres',
         url: configService.getOrThrow<string>('DATABASE_URL'),
         username: configService.getOrThrow<string>('DATABASE_USERNAME'),
         password: configService.getOrThrow<string>('DATABASE_PASSWORD'),
