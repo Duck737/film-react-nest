@@ -1,17 +1,89 @@
-version: '3.8'
-
 services:
-  pg:
+  database:
     image: postgres:16
-    container_name: postgres_container
-    environment:
-      POSTGRES_USER: postgres
-      POSTGRES_PASSWORD: postgres
-      POSTGRES_DB: films
+    env_file:
+      - .env
     volumes:
-      - pg-data:/var/lib/postgresql/data
+      - postgres_data:/var/lib/postgresql/data
+    restart: unless-stopped
+    healthcheck:
+      test:
+        [
+          "CMD-SHELL",
+          "pg_isready -U $$POSTGRES_USER -d $$POSTGRES_DB",
+        ]
+      interval: 5s
+      timeout: 5s
+      retries: 10
+    networks:
+      - film_network
+
+  backend:
+    build:
+      context: ./backend
+      dockerfile: Dockerfile
+    image: ghcr.io/duck737/film-react-nest-backend:latest
+    env_file:
+      - .env
+    depends_on:
+      database:
+        condition: service_healthy
+    restart: unless-stopped
+    networks:
+      - film_network
+
+  frontend:
+    build:
+      context: ./frontend
+      dockerfile: Dockerfile
+      args:
+        VITE_API_URL: ${VITE_API_URL}
+        VITE_CDN_URL: ${VITE_CDN_URL}
+    image: ghcr.io/duck737/film-react-nest-frontend:latest
+    volumes:
+      - frontend_dist:/output
+    restart: "on-failure"
+    networks:
+      - film_network
+
+  nginx:
+    build:
+      context: ./nginx
+      dockerfile: Dockerfile
+    image: ghcr.io/duck737/film-react-nest-nginx:latest
+    depends_on:
+      frontend:
+        condition: service_completed_successfully
+      backend:
+        condition: service_started
     ports:
-      - "5432:5432"
+      - "80:80"
+    volumes:
+      - frontend_dist:/usr/share/nginx/html:ro
+    restart: unless-stopped
+    networks:
+      - film_network
+
+  pgadmin:
+    image: dpage/pgadmin4:8
+    env_file:
+      - .env
+    depends_on:
+      database:
+        condition: service_healthy
+    ports:
+      - "8080:80"
+    volumes:
+      - pgadmin_data:/var/lib/pgadmin
+    restart: unless-stopped
+    networks:
+      - film_network
 
 volumes:
-  pg-data:
+  postgres_data:
+  pgadmin_data:
+  frontend_dist:
+
+networks:
+  film_network:
+    driver: bridge
