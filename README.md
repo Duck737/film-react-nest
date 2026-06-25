@@ -1,5 +1,9 @@
 # FILM!
 
+## Деплой
+
+Доступно по адресу: http://film-react-nest46.nomorepartiessite.ru/
+
 ## Установка
 
 ### PostgreSQL
