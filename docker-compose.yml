@@ -42,7 +42,7 @@ services:
     image: ghcr.io/duck737/film-react-nest-frontend:latest
     volumes:
       - frontend_dist:/output
-    restart: "no"
+    restart: "on-failure"
     networks:
       - film_network
 
